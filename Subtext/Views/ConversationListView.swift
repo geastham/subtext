@@ -1,6 +1,6 @@
 //
 //  ConversationListView.swift
-//  Subtext - Phase 1
+//  Subtext - Phase 2
 //
 
 import SwiftUI
@@ -9,156 +9,209 @@ import SwiftData
 struct ConversationListView: View {
     @Query(sort: \ConversationThread.updatedAt, order: .reverse)
     private var conversations: [ConversationThread]
-    
+
     @Environment(\.modelContext) private var modelContext
-    @State private var showingAddConversation = false
-    
+    @State private var showingImportSheet = false
+    @State private var searchText = ""
+
+    private var filteredConversations: [ConversationThread] {
+        if searchText.isEmpty {
+            return conversations
+        }
+        return conversations.filter { conversation in
+            conversation.title.localizedCaseInsensitiveContains(searchText) ||
+            conversation.participants.contains { $0.localizedCaseInsensitiveContains(searchText) }
+        }
+    }
+
     var body: some View {
         Group {
             if conversations.isEmpty {
-                EmptyStateView()
+                EmptyStateView(onImport: { showingImportSheet = true })
             } else {
                 List {
-                    ForEach(conversations) { conversation in
+                    ForEach(filteredConversations) { conversation in
                         NavigationLink(value: conversation) {
                             ConversationRowView(conversation: conversation)
                         }
                     }
                     .onDelete(perform: deleteConversations)
                 }
+                .searchable(text: $searchText, prompt: "Search conversations")
             }
         }
         .navigationTitle("Conversations")
         .navigationDestination(for: ConversationThread.self) { conversation in
-            ConversationDetailPlaceholderView(conversation: conversation)
+            ConversationDetailView(conversation: conversation)
         }
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Button {
-                    showingAddConversation = true
+                    showingImportSheet = true
                 } label: {
                     Image(systemName: "plus")
                 }
             }
         }
-        .alert("Add Conversation", isPresented: $showingAddConversation) {
-            Button("Cancel", role: .cancel) { }
-            Button("OK") {
-                addSampleConversation()
-            }
-        } message: {
-            Text("This will add a sample conversation. Full import coming in Phase 2.")
+        .sheet(isPresented: $showingImportSheet) {
+            ConversationImportView()
         }
     }
-    
-    private func addSampleConversation() {
-        let conversation = ConversationThread(
-            title: "Sample Conversation",
-            participants: ["Me", "Friend"]
-        )
-        modelContext.insert(conversation)
-        
-        let message = Message(
-            text: "Hey, how are you?",
-            sender: "Friend",
-            isFromUser: false
-        )
-        message.conversationThread = conversation
-        conversation.messages.append(message)
-        conversation.messageCount = 1
-        modelContext.insert(message)
-        
-        try? modelContext.save()
-    }
-    
+
     private func deleteConversations(at offsets: IndexSet) {
         for index in offsets {
-            modelContext.delete(conversations[index])
+            let conversation = filteredConversations[index]
+            modelContext.delete(conversation)
         }
         try? modelContext.save()
     }
 }
 
+// MARK: - Empty State View
+
 struct EmptyStateView: View {
+    var onImport: (() -> Void)?
+
     var body: some View {
-        VStack(spacing: 20) {
+        VStack(spacing: 24) {
             Image(systemName: "message.fill")
                 .font(.system(size: 64))
-                .foregroundColor(.gray)
-            
-            Text("No Conversations Yet")
-                .font(.title2)
-                .fontWeight(.semibold)
-            
-            Text("Tap + to create your first conversation")
-                .font(.subheadline)
-                .foregroundColor(.secondary)
-                .multilineTextAlignment(.center)
+                .foregroundColor(.blue.opacity(0.6))
+
+            VStack(spacing: 8) {
+                Text("No Conversations Yet")
+                    .font(.title2)
+                    .fontWeight(.semibold)
+
+                Text("Import a conversation to get started with AI-powered coaching")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal)
+            }
+
+            if let onImport = onImport {
+                Button {
+                    onImport()
+                } label: {
+                    Label("Import Conversation", systemImage: "doc.on.clipboard")
+                        .fontWeight(.semibold)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+            }
+
+            // Supported formats hint
+            VStack(spacing: 8) {
+                Text("Supported Formats")
+                    .font(.caption)
+                    .fontWeight(.medium)
+                    .foregroundColor(.secondary)
+
+                HStack(spacing: 16) {
+                    FormatBadge(name: "iMessage")
+                    FormatBadge(name: "WhatsApp")
+                    FormatBadge(name: "Telegram")
+                }
+            }
+            .padding(.top, 8)
         }
         .padding()
     }
 }
 
+struct FormatBadge: View {
+    let name: String
+
+    var body: some View {
+        Text(name)
+            .font(.caption2)
+            .fontWeight(.medium)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(Color(.systemGray5))
+            .cornerRadius(6)
+    }
+}
+
+// MARK: - Conversation Row View
+
 struct ConversationRowView: View {
     let conversation: ConversationThread
-    
+
+    private var lastMessagePreview: String? {
+        conversation.messages
+            .sorted { $0.timestamp > $1.timestamp }
+            .first?.text
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(conversation.title)
-                .font(.headline)
-            
-            if !conversation.participants.isEmpty {
-                Text(conversation.participants.joined(separator: ", "))
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
-            }
-            
+        VStack(alignment: .leading, spacing: 6) {
             HStack {
-                Text("\(conversation.messageCount) messages")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                
+                Text(conversation.title)
+                    .font(.headline)
+                    .lineLimit(1)
+
                 Spacer()
-                
+
                 Text(conversation.updatedAt, style: .relative)
                     .font(.caption2)
                     .foregroundColor(.secondary)
+            }
+
+            if !conversation.participants.isEmpty {
+                HStack(spacing: 4) {
+                    Image(systemName: "person.2.fill")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                    Text(conversation.participants.joined(separator: ", "))
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                }
+            }
+
+            if let preview = lastMessagePreview {
+                Text(preview)
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+                    .lineLimit(2)
+            }
+
+            HStack {
+                Label("\(conversation.messageCount)", systemImage: "message.fill")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+
+                Spacer()
             }
         }
         .padding(.vertical, 4)
     }
 }
 
-struct ConversationDetailPlaceholderView: View {
-    let conversation: ConversationThread
-    
-    var body: some View {
-        VStack(spacing: 20) {
-            Image(systemName: "bubble.left.and.bubble.right.fill")
-                .font(.system(size: 64))
-                .foregroundColor(.blue)
-            
-            Text("Conversation Detail")
-                .font(.title2)
-                .fontWeight(.semibold)
-            
-            Text("Full conversation view coming in Phase 2")
-                .font(.subheadline)
-                .foregroundColor(.secondary)
-                .multilineTextAlignment(.center)
-            
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Conversation: \(conversation.title)")
-                Text("Messages: \(conversation.messageCount)")
-                Text("Participants: \(conversation.participants.joined(separator: ", "))")
-            }
-            .font(.caption)
-            .foregroundColor(.secondary)
-            .padding()
-            .background(Color(.systemGray6))
-            .cornerRadius(8)
-        }
-        .padding()
-        .navigationTitle(conversation.title)
+#Preview("With Conversations") {
+    let config = ModelConfiguration(isStoredInMemoryOnly: true)
+    let container = try! ModelContainer(for: ConversationThread.self, Message.self, CoachingSession.self, configurations: config)
+
+    let conversation = ConversationThread(title: "Chat with Sarah", participants: ["Me", "Sarah"])
+    container.mainContext.insert(conversation)
+
+    let message = Message(text: "Hey, want to grab coffee later?", sender: "Sarah", isFromUser: false)
+    message.conversationThread = conversation
+    conversation.messages.append(message)
+    conversation.messageCount = 1
+    container.mainContext.insert(message)
+
+    return NavigationStack {
+        ConversationListView()
     }
+    .modelContainer(container)
+}
+
+#Preview("Empty State") {
+    NavigationStack {
+        ConversationListView()
+    }
+    .modelContainer(for: [ConversationThread.self, Message.self, CoachingSession.self], inMemory: true)
 }
