@@ -241,6 +241,51 @@ struct PromptBuilder {
 
     // MARK: - Simple Prompts (for quick operations)
 
+    /// Build a safety analysis prompt
+    static func buildSafetyPrompt(conversation: [Message]) -> String {
+        let context = conversation.suffix(20).map { msg in
+            "[\(msg.isFromUser ? "Me" : msg.sender)]: \(msg.text)"
+        }.joined(separator: "\n")
+
+        return """
+        Analyze this conversation for unhealthy patterns:
+
+        \(context)
+
+        Look for:
+        - Manipulation tactics (guilt-tripping, emotional blackmail)
+        - Gaslighting (denying reality, making them question themselves)
+        - Boundary violations (ignoring "no", pressuring)
+        - Controlling behavior (isolation, monitoring, jealousy)
+        - Disrespect or toxicity
+        - Threats or violence (explicit or implied)
+
+        For each pattern found, provide:
+        - Type of concern
+        - Severity (low/medium/high)
+        - Specific evidence (quote the messages)
+        - Brief explanation
+
+        Be conservative - only flag clear patterns, not misunderstandings.
+
+        Output JSON:
+        {
+          "flags": [
+            {
+              "type": "manipulation" | "gaslighting" | "pressuring" | "toxicity" | "red_flag" | "violence",
+              "severity": "low" | "medium" | "high",
+              "description": "Brief explanation of the concern",
+              "evidence": ["quote 1", "quote 2"]
+            }
+          ]
+        }
+
+        If no concerns are found, return: {"flags": []}
+
+        IMPORTANT: Respond ONLY with valid JSON matching this schema.
+        """
+    }
+
     /// Build a simple interpretation prompt
     static func buildInterpretationPrompt(message: String) -> String {
         """

@@ -280,6 +280,108 @@ actor LLMClient {
         )
     }
 
+    // MARK: - Generate Safety Analysis
+
+    /// Generate safety analysis for a conversation
+    func generateSafetyAnalysis(
+        conversation: [Message]
+    ) async throws -> SafetyAnalysisResponse {
+        // Ensure model is initialized
+        if status == .notLoaded {
+            await initializeModel()
+        }
+
+        guard status == .ready else {
+            if case .unavailable = status {
+                throw LLMError.modelNotAvailable
+            }
+            throw LLMError.modelNotLoaded
+        }
+
+        // Build the safety prompt
+        let prompt = PromptBuilder.buildSafetyPrompt(conversation: conversation)
+
+        #if canImport(FoundationModels)
+        return try await generateSafetyWithFoundationModels(prompt: prompt)
+        #else
+        return try await generateMockSafetyResponse(conversation: conversation)
+        #endif
+    }
+
+    #if canImport(FoundationModels)
+    private func generateSafetyWithFoundationModels(prompt: String) async throws -> SafetyAnalysisResponse {
+        guard let session = session else {
+            throw LLMError.modelNotLoaded
+        }
+
+        do {
+            let response = try await session.respond(to: prompt)
+            let responseText = response.content
+            return try parseSafetyResponse(from: responseText)
+        } catch let error as LLMError {
+            throw error
+        } catch {
+            throw LLMError.generationFailed(error.localizedDescription)
+        }
+    }
+    #endif
+
+    private func generateMockSafetyResponse(conversation: [Message]) async throws -> SafetyAnalysisResponse {
+        // Simulate network delay
+        try await Task.sleep(nanoseconds: 500_000_000)  // 0.5 seconds
+
+        // Check for any concerning patterns in the conversation
+        var flags: [RiskFlag] = []
+
+        for message in conversation where !message.isFromUser {
+            let text = message.text.lowercased()
+
+            // Check for gaslighting patterns
+            if text.contains("you're overreacting") || text.contains("that never happened") {
+                flags.append(RiskFlag(
+                    type: .gaslighting,
+                    severity: .medium,
+                    description: "This message contains language that could be gaslighting",
+                    evidence: [message.text]
+                ))
+            }
+
+            // Check for manipulation patterns
+            if text.contains("if you loved me") || text.contains("after everything i've done") {
+                flags.append(RiskFlag(
+                    type: .manipulation,
+                    severity: .high,
+                    description: "This message uses manipulative tactics",
+                    evidence: [message.text]
+                ))
+            }
+        }
+
+        return SafetyAnalysisResponse(flags: flags)
+    }
+
+    private func parseSafetyResponse(from text: String) throws -> SafetyAnalysisResponse {
+        // Try to extract JSON from the response
+        guard let jsonStart = text.firstIndex(of: "{"),
+              let jsonEnd = text.lastIndex(of: "}") else {
+            return SafetyAnalysisResponse(flags: [])
+        }
+
+        let jsonString = String(text[jsonStart...jsonEnd])
+
+        guard let jsonData = jsonString.data(using: .utf8) else {
+            throw LLMError.parsingFailed("Could not convert response to data")
+        }
+
+        do {
+            let decoder = JSONDecoder()
+            return try decoder.decode(SafetyAnalysisResponse.self, from: jsonData)
+        } catch {
+            // If parsing fails, return empty flags rather than crashing
+            return SafetyAnalysisResponse(flags: [])
+        }
+    }
+
     // MARK: - Parse Response
 
     private func parseCoachingResponse(from text: String) throws -> CoachingResponse {
@@ -369,4 +471,10 @@ actor LLMClient {
         }
     }
     #endif
+}
+
+// MARK: - Safety Analysis Response
+
+struct SafetyAnalysisResponse: Codable {
+    let flags: [RiskFlag]
 }

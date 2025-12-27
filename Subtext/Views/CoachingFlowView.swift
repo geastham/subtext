@@ -4,6 +4,7 @@
 //
 //  Created by Codegen
 //  Phase 3: AI Integration & Coaching
+//  Updated: Phase 4 - Safety & Polish
 //
 
 import SwiftUI
@@ -11,35 +12,41 @@ import SwiftData
 
 // MARK: - Coaching Flow View
 
-/// Main view that orchestrates the coaching experience
+/// Main view that orchestrates the coaching experience with safety integration
 struct CoachingFlowView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
 
     let conversation: ConversationThread
+    let networkMonitor = NetworkMonitor.shared
 
     @State private var currentStep: CoachingStep = .selectIntent
     @State private var selectedIntent: CoachingIntent?
     @State private var parameters: CoachingParameters = .default
     @State private var coachingResponse: CoachingResponse?
+    @State private var safetyAnalysis: SafetyAnalysis?
     @State private var isLoading = false
     @State private var error: Error?
     @State private var showingError = false
+    @State private var showingSafetyResources = false
 
     enum CoachingStep {
         case selectIntent
         case generating
         case results
+        case error
     }
 
     var body: some View {
         Group {
             switch currentStep {
             case .selectIntent:
-                IntentSelectionView(conversation: conversation) { intent, params in
-                    selectedIntent = intent
-                    parameters = params
-                    startGeneration()
+                OfflineAwareView(requiresNetwork: false) {
+                    IntentSelectionView(conversation: conversation) { intent, params in
+                        selectedIntent = intent
+                        parameters = params
+                        startGeneration()
+                    }
                 }
 
             case .generating:
@@ -50,22 +57,45 @@ struct CoachingFlowView: View {
                     CoachingResultsView(
                         coaching: response,
                         intent: intent,
+                        safetyAnalysis: safetyAnalysis,
                         onRegenerate: {
                             startGeneration()
+                        },
+                        onShowSafetyResources: {
+                            showingSafetyResources = true
                         }
                     )
                 }
+
+            case .error:
+                if let error = error {
+                    NavigationStack {
+                        ErrorView(
+                            error: error,
+                            onRetry: {
+                                startGeneration()
+                            },
+                            onDismiss: {
+                                currentStep = .selectIntent
+                            }
+                        )
+                        .navigationTitle("Error")
+                        .navigationBarTitleDisplayMode(.inline)
+                        .toolbar {
+                            ToolbarItem(placement: .cancellationAction) {
+                                Button("Cancel") {
+                                    currentStep = .selectIntent
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
-        .alert("Coaching Error", isPresented: $showingError, presenting: error) { _ in
-            Button("Try Again") {
-                startGeneration()
+        .sheet(isPresented: $showingSafetyResources) {
+            if let analysis = safetyAnalysis {
+                SafetyResourcesView(analysis: analysis)
             }
-            Button("Cancel", role: .cancel) {
-                currentStep = .selectIntent
-            }
-        } message: { error in
-            Text(error.localizedDescription)
         }
     }
 
@@ -73,85 +103,30 @@ struct CoachingFlowView: View {
 
     private var loadingView: some View {
         NavigationStack {
-            VStack(spacing: 24) {
-                Spacer()
-
-                // Animated sparkles
-                AnimatedSparklesView()
-                    .frame(width: 80, height: 80)
-
-                VStack(spacing: 8) {
-                    Text("Analyzing conversation...")
-                        .font(.title3)
-                        .fontWeight(.semibold)
-
-                    if let intent = selectedIntent {
-                        Text("Getting \(intent.rawValue.lowercased()) suggestions")
-                            .font(.subheadline)
-                            .foregroundColor(.secondary)
-                    }
-                }
-
-                // Progress indicator
-                ProgressView()
-                    .progressViewStyle(.circular)
-                    .scaleEffect(1.2)
-
-                // Tips while loading
-                loadingTips
-
-                Spacer()
-            }
-            .padding()
-            .navigationTitle("Generating")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") {
-                        Task {
-                            // Cancel would go here if we had cancellation support
+            CoachingLoadingView(intent: selectedIntent)
+                .navigationTitle("Generating")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Cancel") {
                             currentStep = .selectIntent
                         }
                     }
                 }
-            }
         }
-    }
-
-    private var loadingTips: some View {
-        VStack(spacing: 12) {
-            Text("Did you know?")
-                .font(.caption)
-                .fontWeight(.semibold)
-                .foregroundColor(.secondary)
-
-            Text(randomTip)
-                .font(.caption)
-                .foregroundColor(.secondary)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal)
-        }
-        .padding()
-        .background(Color(.systemGray6))
-        .cornerRadius(12)
-        .padding(.horizontal, 40)
-    }
-
-    private var randomTip: String {
-        let tips = [
-            "All your conversations are processed entirely on your device. Your privacy is our priority.",
-            "Different tones work for different situations. Experiment to find what feels authentic to you.",
-            "Setting boundaries is a sign of self-respect, not rudeness.",
-            "The best responses are ones that feel true to who you are.",
-            "It's okay to take time before responding. Thoughtful communication builds stronger connections."
-        ]
-        return tips.randomElement() ?? tips[0]
     }
 
     // MARK: - Generation
 
     private func startGeneration() {
         guard let intent = selectedIntent else { return }
+
+        // Check network connectivity
+        guard networkMonitor.isConnected else {
+            error = CoachingError.offline
+            currentStep = .error
+            return
+        }
 
         currentStep = .generating
         isLoading = true
@@ -160,24 +135,43 @@ struct CoachingFlowView: View {
         Task {
             do {
                 let messages = conversation.messages.sorted { $0.timestamp < $1.timestamp }
-                let response = try await LLMClient.shared.generateCoaching(
+
+                // Run coaching and safety analysis in parallel
+                async let coachingTask = LLMClient.shared.generateCoaching(
                     conversation: messages,
                     intent: intent,
                     parameters: parameters
                 )
+                async let safetyTask = SafetyClassifier.shared.analyzeSafety(conversation: messages)
+
+                let (coachingResult, safetyResult) = try await (coachingTask, safetyTask)
+
+                // Merge safety flags into coaching response
+                var finalCoaching = coachingResult
+                if !safetyResult.flags.isEmpty {
+                    let existingTypes = Set(finalCoaching.riskFlags.map { $0.type })
+                    let newFlags = safetyResult.flags.filter { !existingTypes.contains($0.type) }
+                    finalCoaching = CoachingResponse(
+                        summary: finalCoaching.summary,
+                        replies: finalCoaching.replies,
+                        riskFlags: finalCoaching.riskFlags + newFlags,
+                        followUpQuestions: finalCoaching.followUpQuestions
+                    )
+                }
 
                 await MainActor.run {
-                    coachingResponse = response
+                    coachingResponse = finalCoaching
+                    safetyAnalysis = safetyResult
                     currentStep = .results
                     isLoading = false
 
                     // Save session to conversation
-                    saveCoachingSession(intent: intent, response: response)
+                    saveCoachingSession(intent: intent, response: finalCoaching)
                 }
             } catch {
                 await MainActor.run {
                     self.error = error
-                    self.showingError = true
+                    self.currentStep = .error
                     self.isLoading = false
                 }
             }
@@ -202,6 +196,22 @@ struct CoachingFlowView: View {
 
         modelContext.insert(session)
         try? modelContext.save()
+    }
+}
+
+// MARK: - Coaching Error
+
+enum CoachingError: Error, LocalizedError {
+    case offline
+    case safetyAnalysisFailed
+
+    var errorDescription: String? {
+        switch self {
+        case .offline:
+            return "You're offline. Please check your internet connection and try again."
+        case .safetyAnalysisFailed:
+            return "Could not complete safety analysis. Please try again."
+        }
     }
 }
 
