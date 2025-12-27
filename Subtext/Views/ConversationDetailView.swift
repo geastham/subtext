@@ -4,6 +4,7 @@
 //
 //  Created by Codegen
 //  Phase 2: Conversation Management
+//  Updated: Phase 3 - AI Integration & Coaching
 //
 
 import SwiftUI
@@ -16,10 +17,15 @@ struct ConversationDetailView: View {
     @State private var showingCoaching = false
     @State private var showingEditSheet = false
     @State private var showingDeleteAlert = false
+    @State private var showingHistory = false
     @State private var messageToDelete: Message?
 
     private var sortedMessages: [Message] {
         conversation.messages.sorted { $0.timestamp < $1.timestamp }
+    }
+
+    private var sortedSessions: [CoachingSession] {
+        conversation.coachingSessions.sorted { $0.createdAt > $1.createdAt }
     }
 
     var body: some View {
@@ -28,6 +34,11 @@ struct ConversationDetailView: View {
                 LazyVStack(spacing: 12) {
                     // Conversation info header
                     conversationHeader
+
+                    // Quick coaching button
+                    if !sortedMessages.isEmpty {
+                        quickCoachingButton
+                    }
 
                     // Messages
                     ForEach(sortedMessages) { message in
@@ -58,6 +69,16 @@ struct ConversationDetailView: View {
                         Label("Get Coaching", systemImage: "sparkles")
                     }
 
+                    if !sortedSessions.isEmpty {
+                        Button {
+                            showingHistory = true
+                        } label: {
+                            Label("Coaching History", systemImage: "clock.arrow.circlepath")
+                        }
+                    }
+
+                    Divider()
+
                     Button {
                         showingEditSheet = true
                     } label: {
@@ -69,10 +90,13 @@ struct ConversationDetailView: View {
             }
         }
         .sheet(isPresented: $showingCoaching) {
-            CoachingPlaceholderView(conversation: conversation)
+            CoachingFlowView(conversation: conversation)
         }
         .sheet(isPresented: $showingEditSheet) {
             EditConversationView(conversation: conversation)
+        }
+        .sheet(isPresented: $showingHistory) {
+            CoachingHistoryView(sessions: sortedSessions)
         }
         .alert("Delete Message?", isPresented: $showingDeleteAlert, presenting: messageToDelete) { message in
             Button("Cancel", role: .cancel) {
@@ -84,6 +108,30 @@ struct ConversationDetailView: View {
         } message: { message in
             Text("This message will be permanently deleted.")
         }
+    }
+
+    // MARK: - Quick Coaching Button
+
+    private var quickCoachingButton: some View {
+        Button {
+            showingCoaching = true
+        } label: {
+            HStack {
+                Image(systemName: "sparkles")
+                    .foregroundColor(.purple)
+                Text("Get AI Coaching")
+                    .fontWeight(.medium)
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            .padding()
+            .background(Color.purple.opacity(0.1))
+            .cornerRadius(12)
+        }
+        .buttonStyle(.plain)
+        .padding(.bottom, 8)
     }
 
     // MARK: - Conversation Header
@@ -271,49 +319,29 @@ struct EditConversationView: View {
     }
 }
 
-// MARK: - Coaching Placeholder View
+// MARK: - Coaching History View
 
-struct CoachingPlaceholderView: View {
+struct CoachingHistoryView: View {
     @Environment(\.dismiss) private var dismiss
 
-    let conversation: ConversationThread
+    let sessions: [CoachingSession]
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 24) {
-                Image(systemName: "sparkles")
-                    .font(.system(size: 64))
-                    .foregroundColor(.purple)
-
-                Text("AI Coaching")
-                    .font(.title2)
-                    .fontWeight(.semibold)
-
-                Text("Get personalized coaching for this conversation")
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
-                    .multilineTextAlignment(.center)
-
-                VStack(alignment: .leading, spacing: 12) {
-                    Text("Coming in Phase 3:")
-                        .font(.headline)
-
-                    VStack(alignment: .leading, spacing: 8) {
-                        FeatureRow(icon: "text.bubble", text: "Generate reply suggestions")
-                        FeatureRow(icon: "brain", text: "Interpret their messages")
-                        FeatureRow(icon: "hand.raised", text: "Set healthy boundaries")
-                        FeatureRow(icon: "heart", text: "Improve your flirting")
-                        FeatureRow(icon: "figure.2.arms.open", text: "Resolve conflicts")
+            List {
+                if sessions.isEmpty {
+                    ContentUnavailableView(
+                        "No Coaching History",
+                        systemImage: "clock.arrow.circlepath",
+                        description: Text("Your coaching sessions will appear here")
+                    )
+                } else {
+                    ForEach(sessions) { session in
+                        CoachingSessionRow(session: session)
                     }
                 }
-                .padding()
-                .background(Color(.systemGray6))
-                .cornerRadius(12)
-
-                Spacer()
             }
-            .padding()
-            .navigationTitle("Coaching")
+            .navigationTitle("Coaching History")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
@@ -324,24 +352,85 @@ struct CoachingPlaceholderView: View {
     }
 }
 
-struct FeatureRow: View {
-    let icon: String
-    let text: String
+struct CoachingSessionRow: View {
+    let session: CoachingSession
+
+    @State private var isExpanded = false
 
     var body: some View {
-        HStack {
-            Image(systemName: icon)
-                .foregroundColor(.purple)
-                .frame(width: 24)
-            Text(text)
-                .font(.subheadline)
+        VStack(alignment: .leading, spacing: 12) {
+            Button {
+                withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                    isExpanded.toggle()
+                }
+            } label: {
+                HStack {
+                    Image(systemName: session.intent.icon)
+                        .foregroundColor(.purple)
+                        .frame(width: 24)
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(session.intent.rawValue)
+                            .font(.headline)
+                            .foregroundColor(.primary)
+
+                        Text(session.createdAt, style: .relative)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+
+                    Spacer()
+
+                    Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                        .foregroundColor(.secondary)
+                }
+            }
+            .buttonStyle(.plain)
+
+            if isExpanded {
+                VStack(alignment: .leading, spacing: 12) {
+                    if !session.summary.isEmpty {
+                        Text(session.summary)
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                    }
+
+                    if !session.replies.isEmpty {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Suggestions:")
+                                .font(.caption)
+                                .fontWeight(.semibold)
+                                .foregroundColor(.secondary)
+
+                            ForEach(session.replies) { reply in
+                                HStack(alignment: .top, spacing: 8) {
+                                    Image(systemName: "circle.fill")
+                                        .font(.system(size: 6))
+                                        .foregroundColor(.purple)
+                                        .padding(.top, 6)
+
+                                    Text(reply.text)
+                                        .font(.subheadline)
+                                        .lineLimit(2)
+                                }
+                            }
+                        }
+                    }
+                }
+                .padding(.leading, 32)
+                .transition(.opacity.combined(with: .move(edge: .top)))
+            }
         }
+        .padding(.vertical, 4)
     }
 }
 
 #Preview {
     let config = ModelConfiguration(isStoredInMemoryOnly: true)
-    let container = try! ModelContainer(for: ConversationThread.self, Message.self, configurations: config)
+    let container = try! ModelContainer(
+        for: ConversationThread.self, Message.self, CoachingSession.self,
+        configurations: config
+    )
 
     let conversation = ConversationThread(title: "Chat with Sarah", participants: ["Me", "Sarah"])
     container.mainContext.insert(conversation)
