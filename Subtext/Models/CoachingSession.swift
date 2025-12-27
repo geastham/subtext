@@ -175,11 +175,55 @@ struct RiskFlag: Codable, Equatable {
         case pressuring
         case toxicity
         case redFlag = "red_flag"
+        case violence
     }
 
     enum RiskSeverity: String, Codable, CaseIterable {
         case low
         case medium
         case high
+    }
+}
+
+// MARK: - Risk Level
+
+enum RiskLevel: String, Codable, CaseIterable {
+    case none
+    case low
+    case medium
+    case high
+}
+
+// MARK: - Safety Analysis
+
+struct SafetyAnalysis: Equatable {
+    let flags: [RiskFlag]
+    let overallRisk: RiskLevel
+    let recommendations: [String]
+    let supportResources: [SupportResource]
+
+    static let empty = SafetyAnalysis(
+        flags: [],
+        overallRisk: .none,
+        recommendations: [],
+        supportResources: []
+    )
+}
+
+// MARK: - Support Resource
+
+struct SupportResource: Identifiable, Equatable, Codable {
+    let id: UUID
+    let title: String
+    let description: String
+    let phone: String
+    let website: String
+
+    init(id: UUID = UUID(), title: String, description: String, phone: String, website: String) {
+        self.id = id
+        self.title = title
+        self.description = description
+        self.phone = phone
+        self.website = website
     }
 }

@@ -4,6 +4,7 @@
 //
 //  Created by Codegen
 //  Phase 3: AI Integration & Coaching
+//  Updated: Phase 4 - Safety & Polish
 //
 
 import SwiftUI
@@ -16,7 +17,9 @@ struct CoachingResultsView: View {
 
     let coaching: CoachingResponse
     let intent: CoachingIntent
+    var safetyAnalysis: SafetyAnalysis? = nil
     let onRegenerate: () -> Void
+    var onShowSafetyResources: (() -> Void)? = nil
 
     @State private var selectedReply: CoachingReply?
     @State private var showingCopied = false
@@ -27,6 +30,11 @@ struct CoachingResultsView: View {
             ScrollView {
                 VStack(spacing: 24) {
                     intentBadge
+
+                    // Safety banner if there are concerns
+                    if let analysis = safetyAnalysis, !analysis.flags.isEmpty {
+                        safetyBanner(analysis: analysis)
+                    }
 
                     summarySection
 
@@ -65,6 +73,14 @@ struct CoachingResultsView: View {
                 }
             }
             .animation(.spring(response: 0.3, dampingFraction: 0.8), value: showingCopied)
+        }
+    }
+
+    // MARK: - Safety Banner
+
+    private func safetyBanner(analysis: SafetyAnalysis) -> some View {
+        SafetyBannerView(analysis: analysis) {
+            onShowSafetyResources?()
         }
     }
 
@@ -403,6 +419,7 @@ struct RiskFlagBanner: View {
         case .pressuring: return "Pressuring Behavior"
         case .toxicity: return "Toxic Communication"
         case .redFlag: return "Red Flag"
+        case .violence: return "Violence/Threats Detected"
         }
     }
 }
